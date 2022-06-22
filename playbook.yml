@@ -1,0 +1,168 @@
+---
+- hosts: debian
+  become: true
+  remote_user: debian
+  vars:
+    mysql_root_password: root
+    server_name: ecommerce.fr
+    server_root_dir: /home/debian/apps
+    server_web_dir: "{{ server_root_dir }}/app/public"
+    git_repo: git@github.com:EpitechMscProPromo2024/T-WEB-600-LYN-6-1-ecommerce-alexandre1.clain.git
+  tasks:
+    - ping: ~
+
+    - name: Stop if not Debian 11
+      meta: end_play
+      when: ansible_distribution != "Debian" or ansible_distribution_major_version != "11"
+
+    - name: Update APT packages
+      apt:
+        update_cache: yes
+
+    - name: Upgrade APT
+      apt:
+        upgrade: safe
+
+    - name: APT utilities
+      apt:
+        name: software-properties-common
+        update_cache: yes
+
+    - name: Install repositories
+      apt:
+        name:
+          - ca-certificates
+          - apt-transport-https
+          - software-properties-common
+          - wget
+          - curl
+          - lsb-release
+          - git
+          - unzip
+          - zip
+          - python3
+          - python3-pip
+          - python3-pymysql
+        state: latest
+        update_cache: yes
+
+    - name: Install MariaDB
+      apt:
+        name: mariadb-server
+        state: latest
+
+    - name: Start MariaDB service
+      service:
+        name: mariadb
+        enabled: true
+        state: started
+
+    - name: Create MariaDB user
+      mysql_user:
+        check_implicit_admin: true
+        login_password: "{{ mysql_root_password }}"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        name: symfony
+        password: "{{ mysql_root_password }}"
+        priv: "*.*:ALL"
+        state: present
+
+    - name: Create MariaDB database
+      mysql_db:
+        login_user: symfony
+        login_password: "{{ mysql_root_password }}"
+        name: ecommerce
+        state: present
+
+    - name: Updating the repo
+      apt:
+        update_cache: true
+
+    - name: Install PHP
+      apt:
+        name: php7.4
+        state: present
+
+    - name: Install PHP utilities
+      apt:
+        pkg:
+          - php7.4-mysql
+          - php7.4-curl
+          - php7.4-json
+          - php7.4-cgi
+          - php7.4-xsl
+          - php7.4-cgi
+          - php7.4-gd
+          - php7.4-mbstring
+          - php7.4-zip
+          - php7.4-xmlrpc
+          - php7.4-soap
+          - php7.4-intl
+          - libapache2-mod-php
+        state: present
+        update_cache: yes
+
+    - name: Install Composer
+      shell: "wget -O composer-setup.php https://getcomposer.org/installer ; sudo php composer-setup.php --install-dir=/usr/local/bin --filename=composer ; rm composer-setup.php"
+
+    - name: Update Composer
+      shell: "composer self-update"
+
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: latest
+
+    - name: Start Nginx
+      service:
+        name: nginx
+        state: restarted
+
+    - name: Add Symfony config template
+      template:
+        src: templates/nginx.conf
+        dest: "/etc/nginx/sites-available/{{ server_name }}.conf"
+
+    - name: Enable Symfony config
+      file:
+        src: "/etc/nginx/sites-available/{{ server_name }}.conf"
+        dest: "/etc/nginx/sites-enabled/{{ server_name }}.conf"
+        state: link
+
+    - name: Edit /etc/hosts config
+      lineinfile:
+        dest: /etc/hosts
+        regexp: "{{ server_name }}"
+        line: "127.0.0.1 {{ server_name }}"
+
+    - name: Git clone
+      git:
+        repo: "{{ git_repo }}"
+        dest: "{{ server_root_dir }}"
+        version: main
+      ignore_errors: true
+      become: false
+      remote_user: debian
+
+    - name: Git pull
+      shell: "cd {{ server_root_dir }} ; git pull origin main"
+      become: false
+      remote_user: debian
+
+    - name: Add .env to app
+      template:
+        src: templates/.env
+        dest: "{{ server_root_dir }}/app"
+
+    - name: Remove composer.lock
+      shell: "cd {{ server_root_dir }}/app ; rm composer.lock"
+
+    - name: Install dependencies
+      composer:
+        command: install
+        working_dir: "{{ server_root_dir }}/app"
+      become: false
+
+    - name: Start server
+      shell: "cd {{ server_root_dir }}/app ; php bin/console server:start"
+      become: false
